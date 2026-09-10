@@ -1,1 +1,0 @@
-Write-Host "Welcome to My Script World"

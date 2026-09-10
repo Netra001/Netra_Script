@@ -1,1 +1,0 @@
-# Netra_Script
