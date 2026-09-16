@@ -23,18 +23,41 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+from datetime import datetime
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 # ======================================================================
 # CONFIGURATION
 # ======================================================================
 
-BACKEND_SCRIPT = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "ConfigOperations-Backend.ps1"
-)
+def resource_path(filename):
+    """
+    Locate a bundled resource.
+
+    When running as a PyInstaller --onefile exe, bundled files are
+    extracted to a temporary folder exposed as sys._MEIPASS. When
+    running as a plain script, they sit next to this file.
+
+    A copy sitting beside the exe takes priority, so the backend can be
+    patched without rebuilding.
+    """
+    beside_exe = os.path.join(
+        os.path.dirname(os.path.abspath(sys.executable)), filename
+    )
+    if getattr(sys, "frozen", False) and os.path.exists(beside_exe):
+        return beside_exe
+
+    base = getattr(
+        sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))
+    )
+    return os.path.join(base, filename)
+
+
+BACKEND_SCRIPT = resource_path("ConfigOperations-Backend.ps1")
 
 COPY_FILE_DIRECTORY = r"C:\CopyFiles"
+
+LOG_FOLDER = r"C:\Temp"
 
 AVAILABILITY_ZONES_DEFAULT_SERVER_TYPE = "tnp"
 
@@ -392,9 +415,26 @@ class ConfigOperationsApp(tk.Tk):
         self.output_queue = queue.Queue()
         self.worker = None
 
+        # Session log - written to continuously so a full record survives
+        # even if the user closes the app without clicking Save Log.
+        self.session_log_path = None
+        self._init_session_log()
+
         self._build_ui()
         self._resolve_environment()
         self.after(100, self._drain_output_queue)
+
+    def _init_session_log(self):
+        try:
+            os.makedirs(LOG_FOLDER, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.session_log_path = os.path.join(
+                LOG_FOLDER, f"ConfigOperations_{timestamp}.txt"
+            )
+        except OSError:
+            # Logging to disk is best-effort - the GUI's output pane and
+            # the manual Save Log button still work either way.
+            self.session_log_path = None
 
     # ------------------------------------------------------------------
     # UI CONSTRUCTION
@@ -509,8 +549,14 @@ class ConfigOperationsApp(tk.Tk):
                                         command=self._submit, state="disabled")
         self.submit_button.pack(side="left", padx=8)
 
+        ttk.Button(row, text="Reset",
+                   command=self._reset_form).pack(side="left", padx=8)
+
         ttk.Button(row, text="Clear Output",
                    command=self._clear_output).pack(side="left")
+
+        ttk.Button(row, text="Save Log...",
+                   command=self._save_log).pack(side="left", padx=8)
 
         ttk.Label(row, text="Contact : netra.chettri@corecard.com",
                   font=("Segoe UI", 8)).pack(side="right")
@@ -534,18 +580,96 @@ class ConfigOperationsApp(tk.Tk):
         self.output.see("end")
         self.output.configure(state="disabled")
 
+        if self.session_log_path:
+            try:
+                with open(self.session_log_path, "a", encoding="utf-8") as handle:
+                    handle.write(text + "\n")
+            except OSError:
+                pass
+
     def _clear_output(self):
         self.output.configure(state="normal")
         self.output.delete("1.0", "end")
         self.output.configure(state="disabled")
+
+    def _save_log(self):
+        """Let the user export the full output pane to a .txt file."""
+        content = self.output.get("1.0", "end").rstrip("\n")
+
+        if not content:
+            messagebox.showinfo("Save Log", "There is no output to save yet.")
+            return
+
+        default_name = f"ConfigOperations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+        path = filedialog.asksaveasfilename(
+            title="Save Log As",
+            initialfile=default_name,
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(content + "\n")
+        except OSError as exc:
+            messagebox.showerror("Save Log", f"Could not save the log:\n\n{exc}")
+            return
+
+        self.log(f"Log saved to: {path}")
+        messagebox.showinfo("Save Log", f"Log saved to:\n{path}")
+
+    def _reset_form(self):
+        """
+        Clear every selection back to its initial state, without closing
+        the window - equivalent to the original PowerShell script looping
+        back to a fresh form (`do {...} while (1 -eq 1)`).
+        """
+        if self.worker and self.worker.is_alive():
+            messagebox.showwarning(
+                "Operation running",
+                "An operation is still running. Please wait for it to "
+                "finish before resetting the form."
+            )
+            return
+
+        self.pod_combo.set("")
+        self.stack_combo.set("")
+        self.operation_combo.set("")
+
+        self.job_combo.set("")
+        self.job_combo.configure(values=[])
+
+        self.process_list.clear()
+        self.az_list.clear()
+
+        self.range_start.delete(0, "end")
+        self.range_start.insert(0, "0")
+        self.range_end.delete(0, "end")
+        self.range_end.insert(0, "0")
+
+        self.server_type_list.set_items(SERVER_TYPES_LIST)
+
+        self.copy_source_path = None
+        self.copy_source_path_archive = None
+        self.server_list = []
+
+        self.submit_button.configure(state="disabled")
+        self.preview_button.configure(state="normal")
+
+        self.log("")
+        self.log("Form reset.")
 
     def _drain_output_queue(self):
         try:
             while True:
                 line = self.output_queue.get_nowait()
                 if line is None:
-                    self.submit_button.configure(state="normal")
                     self.preview_button.configure(state="normal")
+                    self._validate()
                 else:
                     self.log(line.rstrip())
         except queue.Empty:
@@ -557,6 +681,9 @@ class ConfigOperationsApp(tk.Tk):
     # ------------------------------------------------------------------
 
     def _resolve_environment(self):
+        if self.session_log_path:
+            self.log(f"Session log: {self.session_log_path}")
+
         self.log(f"Local server: {self.this_server}")
 
         if "e1" in self.this_server:
