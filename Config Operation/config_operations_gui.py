@@ -94,7 +94,7 @@ PROCESSES_LIST = [
     "Rundbb_BulkCardFileValidator*", "Rundbb_IPMSettlement*",
     "Rundbb_BulkSOLDAPICall*", "keyedhashpopulator*",
     "Rundbb_BillPayPayment*", "Rundbb_LockBox*", "Rundbb_AccountCreation*",
-    "Rundbb_ThirdPartyAlerts*",
+    "Rundbb_ThirdPartyAlerts*","Rundbb_ThirdPartyAlertsCBES*",
 ]
 
 TASKS_LIST = [
@@ -115,7 +115,7 @@ TASKS_LIST = [
     "Task_APIQueue*", "Task_CBRManualDF*", "Task_BulkCardFileValidator*",
     "Task_IPMSettlement*", "Task_BulkSOLDAPICall*",
     "Task_keyedhashpopulator*", "Task_BillPayPayment*", "Task_LockBox*",
-    "Task_AccountCreation*", "Task_ThirdPartyAlerts*",
+    "Task_AccountCreation*", "Task_ThirdPartyAlerts*","Task_ThirdPartyAlertsCBES*",
     "Amazon Ec2 Launch - Userdata Execution",
 ]
 
