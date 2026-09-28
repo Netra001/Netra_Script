@@ -306,7 +306,7 @@ class PlatformDeleteApp(tk.Tk):
         ttk.Label(body, text="Server Types:").pack(anchor="w", pady=(8, 0))
         self.server_type_list = CheckList(body, height=90)
         self.server_type_list.pack(fill="x", pady=3)
-        self.server_type_list.set_items(SERVER_TYPES, checked_by_default=True)
+        self.server_type_list.set_items(SERVER_TYPES, checked_by_default=False)
         self.server_type_list.set_on_change(self._validate)
 
         # ---- Deletion condition ----
@@ -519,7 +519,8 @@ class PlatformDeleteApp(tk.Tk):
             child.destroy()
 
         if self.is_prod:
-            # PROD: single-select radio buttons - structurally can't pick "all".
+            # PROD: one concrete AZ only; never expose the wildcard option.
+            zones = [zone for zone in zones if zone != "*"]
             self.az_var = tk.StringVar(value="")
             for zone in zones:
                 ttk.Radiobutton(
@@ -558,10 +559,14 @@ class PlatformDeleteApp(tk.Tk):
     # VALIDATION
     # ------------------------------------------------------------------
 
+    def _az_selection_is_valid(self):
+        azs = self._selected_azs()
+        return bool(azs) and (not self.is_prod or len(azs) == 1 and azs[0] != "*")
+
     def _validate(self, _event=None):
         ready = all([
             self.pod_name,
-            self._selected_azs(),
+            self._az_selection_is_valid(),
             self.server_type_list.checked(),
             self.condition_var.get(),
         ])
@@ -630,7 +635,7 @@ class PlatformDeleteApp(tk.Tk):
             child.destroy()
         self.az_widget = None
 
-        self.server_type_list.set_items(SERVER_TYPES, checked_by_default=True)
+        self.server_type_list.set_items(SERVER_TYPES, checked_by_default=False)
         self.condition_var.set("")
         self.server_list = []
 
@@ -647,6 +652,15 @@ class PlatformDeleteApp(tk.Tk):
     def _submit(self):
         azs = self._selected_azs()
         condition = self.condition_var.get()
+
+        if not self._az_selection_is_valid():
+            messagebox.showerror(
+                "Invalid Availability Zone",
+                "PROD requires exactly one specific Availability Zone."
+                if self.is_prod else
+                "Please select at least one Availability Zone.",
+            )
+            return
 
         self.log("")
         self.log("Resolving server list...")
@@ -707,7 +721,7 @@ class PlatformDeleteApp(tk.Tk):
             "-PODName", self.pod_name,
             "-AvailabilityZoneLabel", az_label,
             "-ConditionSelected", condition,
-            "-ServerList", ",".join(servers),
+            "-ServerList", *servers,
         ]
 
         self.output_queue.put("")
